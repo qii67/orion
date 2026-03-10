@@ -35,6 +35,7 @@
 
 - SkillRegistry 职责：
   - 注册 / 查询 / 列出技能
+  - 支持用户在对话中动态创建模板化 Skill（`create_skill`）并调用（`run_skill`）
   - 可扩展能力隔离（后续可加入沙箱和权限）
 
 - 指标追踪：
@@ -61,9 +62,15 @@
 1. 写入 semantic memory（长期沉淀）；
 2. 写入 episodic event（用于追溯和评估来源可靠性）。
 
-## 6. 下一步演进建议
+## 6. 安全治理层（当前实现）
+
+- 新增敏感行为管控组件，对高风险 shell 命令进行拒绝（如 `rm -rf`、`mkfs`、fork bomb、`curl|bash`）。
+- 新增技能模板内容审核，阻止包含 `token/password/secret` 等敏感关键词的模板。
+- 被拦截行为会写入 episodic memory，支持后续审计与策略优化。
+
+## 7. 下一步演进建议
 
 1. 增加向量检索（RAG）和记忆打分器；
 2. Skill 引入 manifest 与 ABI，支持跨语言插件；
 3. 引入自我反思（reflection）任务，离线微调策略；
-4. 增加安全治理层（策略白名单、执行配额、审计日志）。
+4. 增加执行配额与多级审批策略。

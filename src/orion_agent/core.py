@@ -136,6 +136,40 @@ class ToolRegistry:
         return sorted(self._tools.keys())
 
 
+class SensitiveActionGuard:
+    """Performs simple policy checks for potentially dangerous actions."""
+
+    def __init__(self) -> None:
+        self._blocked_shell_patterns = [
+            (r"\brm\s+-rf\b", "blocked destructive deletion command"),
+            (r"\bmkfs\b", "blocked disk formatting command"),
+            (r"\bshutdown\b|\breboot\b", "blocked host control command"),
+            (r":\(\)\s*\{", "blocked fork bomb pattern"),
+            (r"\bcurl\b.+\|\s*(bash|sh)", "blocked piped remote script execution"),
+        ]
+        self._blocked_text_patterns = [
+            (r"\btoken\b", "contains sensitive token keyword"),
+            (r"\bpassword\b", "contains sensitive password keyword"),
+            (r"\bsecret\b", "contains sensitive secret keyword"),
+        ]
+
+    def validate_shell_command(self, command: str) -> Optional[str]:
+        stripped = command.strip()
+        if not stripped:
+            return "empty shell command is not allowed"
+        for pattern, reason in self._blocked_shell_patterns:
+            if re.search(pattern, stripped, flags=re.IGNORECASE):
+                return reason
+        return None
+
+    def validate_skill_template(self, template: str) -> Optional[str]:
+        lowered = template.lower()
+        for pattern, reason in self._blocked_text_patterns:
+            if re.search(pattern, lowered):
+                return reason
+        return None
+
+
 class SafeCalculator:
     """Evaluates basic arithmetic expressions using a safe AST interpreter."""
 
@@ -219,7 +253,21 @@ class ReActAgent:
 
     def _plan(self, user_message: str) -> List[tuple[str, str, str]]:
         lowered = user_message.lower().strip()
-        if re.search(r"[\d\s\+\-\*/\(\)\.]+", lowered) and any(
+        if lowered.startswith("create skill:") or lowered.startswith("创建技能:"):
+            payload = user_message.split(":", maxsplit=1)[-1].strip()
+            return [(
+                "create_skill",
+                payload,
+                "The user wants to define a new reusable skill template.",
+            )]
+        if lowered.startswith("run skill:") or lowered.startswith("运行技能:"):
+            payload = user_message.split(":", maxsplit=1)[-1].strip()
+            return [(
+                "run_skill",
+                payload,
+                "The user wants to invoke an existing skill by name.",
+            )]
+        if any(ch.isdigit() for ch in lowered) and re.search(r"[\d\s\+\-\*/\(\)\.]+", lowered) and any(
             op in lowered for op in ["+", "-", "*", "/"]
         ):
             expression = re.sub(r"[^0-9\+\-\*/\(\)\.\s]", "", user_message).strip()
@@ -258,8 +306,40 @@ class Agent:
         self.feedback = FeedbackEngine()
         self.architecture_log: List[str] = []
         self.tools = ToolRegistry()
+        self.guard = SensitiveActionGuard()
         self.react_agent = ReActAgent(self.tools)
         self._register_default_tools()
+
+    def create_template_skill(self, name: str, description: str, template: str) -> str:
+        normalized_name = name.strip().lower()
+        if not re.match(r"^[a-z][a-z0-9_-]{1,31}$", normalized_name):
+            raise ValueError("invalid skill name")
+        if normalized_name in {"echo", "calculator", "shell", "create_skill", "run_skill"}:
+            raise ValueError("reserved skill name")
+        if self.skills.get(normalized_name):
+            raise ValueError("skill already exists")
+        violation = self.guard.validate_skill_template(template)
+        if violation:
+            raise ValueError(f"skill rejected: {violation}")
+
+        template_text = template.strip()
+
+        def _handler(prompt: str) -> str:
+            return template_text.replace("{prompt}", prompt)
+
+        self.skills.register(
+            Skill(
+                name=normalized_name,
+                description=description.strip() or "User-created template skill",
+                handler=_handler,
+            )
+        )
+        self.episodic_memory.add(
+            category="skill_creation",
+            content=f"created skill={normalized_name}, desc={description}",
+            score=0.6,
+        )
+        return f"skill created: {normalized_name}"
 
     def _register_default_tools(self) -> None:
         calc = SafeCalculator()
@@ -280,6 +360,14 @@ class Agent:
         )
 
         def _run_shell(command: str) -> str:
+            violation = self.guard.validate_shell_command(command)
+            if violation:
+                self.episodic_memory.add(
+                    category="security_block",
+                    content=f"shell blocked: command={command}, reason={violation}",
+                    score=1.0,
+                )
+                return f"blocked by security policy: {violation}"
             completed = subprocess.run(
                 command,
                 shell=True,
@@ -296,6 +384,44 @@ class Agent:
                 name="shell",
                 description="Run a shell command",
                 handler=_run_shell,
+            )
+        )
+
+        def _create_skill(payload: str) -> str:
+            pieces = [part.strip() for part in payload.split("|")]
+            if len(pieces) != 3:
+                return "usage: <name>|<description>|<template with optional {prompt}>"
+            name, description, template = pieces
+            try:
+                return self.create_template_skill(name, description, template)
+            except ValueError as exc:
+                return f"skill creation failed: {exc}"
+
+        self.tools.register(
+            Tool(
+                name="create_skill",
+                description="Create a template-based skill using name|description|template",
+                handler=_create_skill,
+            )
+        )
+
+        def _run_skill(payload: str) -> str:
+            skill_name, prompt = payload, ""
+            if ":" in payload:
+                skill_name, prompt = payload.split(":", maxsplit=1)
+            skill = self.skills.get(skill_name.strip().lower())
+            if not skill:
+                return f"skill not found: {skill_name.strip()}"
+            try:
+                return skill.execute(prompt.strip())
+            except Exception as exc:  # pragma: no cover - defensive
+                return f"skill execution failed: {exc}"
+
+        self.tools.register(
+            Tool(
+                name="run_skill",
+                description="Run an existing skill using <skill_name>:<prompt>",
+                handler=_run_skill,
             )
         )
 
