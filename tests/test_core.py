@@ -60,6 +60,23 @@ class TestAgentCore(unittest.TestCase):
         self.assertEqual(result.steps[0].action, "create_skill")
         self.assertIn("skill creation failed", result.steps[0].observation)
 
+    def test_persona_can_be_set_and_shown(self) -> None:
+        updated = self.agent.run_dialogue_turn(
+            "set persona: 温暖导师|简洁回答,先结论后细节"
+        )
+        self.assertEqual(updated.steps[0].action, "set_persona")
+        self.assertIn("persona updated", updated.steps[0].observation)
+
+        shown = self.agent.run_dialogue_turn("show persona")
+        self.assertEqual(shown.steps[0].action, "show_persona")
+        self.assertIn("温暖导师", shown.steps[0].observation)
+        self.assertIn("简洁回答", shown.answer)
+
+    def test_persona_set_usage_validation(self) -> None:
+        result = self.agent.run_dialogue_turn("set persona: only-style")
+        self.assertEqual(result.steps[0].action, "set_persona")
+        self.assertIn("usage:", result.steps[0].observation)
+
 
 if __name__ == "__main__":
     unittest.main()

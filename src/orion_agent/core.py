@@ -219,11 +219,22 @@ class ReActResult:
     steps: List[ReActStep]
 
 
+@dataclass
+class PersonaProfile:
+    style: str = "专业、清晰"
+    principles: List[str] = field(default_factory=list)
+
+    def to_text(self) -> str:
+        principle_text = "；".join(self.principles) if self.principles else "无"
+        return f"风格={self.style} | 原则={principle_text}"
+
+
 class ReActAgent:
     """A tiny ReAct-style agent that chooses tools, observes, and responds."""
 
-    def __init__(self, tools: Optional[ToolRegistry] = None) -> None:
+    def __init__(self, tools: Optional[ToolRegistry] = None, persona: Optional[PersonaProfile] = None) -> None:
         self.tools = tools or ToolRegistry()
+        self.persona = persona or PersonaProfile()
 
     def solve(self, user_message: str) -> ReActResult:
         plan = self._plan(user_message)
@@ -267,6 +278,19 @@ class ReActAgent:
                 payload,
                 "The user wants to invoke an existing skill by name.",
             )]
+        if lowered.startswith("set persona:") or lowered.startswith("设定人格:"):
+            payload = user_message.split(":", maxsplit=1)[-1].strip()
+            return [(
+                "set_persona",
+                payload,
+                "The user wants to customize the assistant persona.",
+            )]
+        if lowered in {"show persona", "查看人格"}:
+            return [(
+                "show_persona",
+                "",
+                "The user wants to inspect current persona settings.",
+            )]
         if any(ch.isdigit() for ch in lowered) and re.search(r"[\d\s\+\-\*/\(\)\.]+", lowered) and any(
             op in lowered for op in ["+", "-", "*", "/"]
         ):
@@ -293,7 +317,11 @@ class ReActAgent:
         if not steps:
             return "I could not produce any reasoning steps."
         final_observation = steps[-1].observation
-        return f"任务: {user_message}\n结果: {final_observation}"
+        return (
+            f"[人格] {self.persona.to_text()}\n"
+            f"任务: {user_message}\n"
+            f"结果: {final_observation}"
+        )
 
 
 class Agent:
@@ -307,8 +335,21 @@ class Agent:
         self.architecture_log: List[str] = []
         self.tools = ToolRegistry()
         self.guard = SensitiveActionGuard()
-        self.react_agent = ReActAgent(self.tools)
+        self.persona = PersonaProfile()
+        self.react_agent = ReActAgent(self.tools, self.persona)
         self._register_default_tools()
+
+    def update_persona(self, style: str, principles: List[str]) -> PersonaProfile:
+        style_text = style.strip() or "专业、清晰"
+        normalized_principles = [p.strip() for p in principles if p.strip()]
+        self.persona.style = style_text
+        self.persona.principles = normalized_principles
+        self.episodic_memory.add(
+            category="persona_update",
+            content=f"style={style_text}, principles={normalized_principles}",
+            score=0.6,
+        )
+        return self.persona
 
     def create_template_skill(self, name: str, description: str, template: str) -> str:
         normalized_name = name.strip().lower()
@@ -422,6 +463,31 @@ class Agent:
                 name="run_skill",
                 description="Run an existing skill using <skill_name>:<prompt>",
                 handler=_run_skill,
+            )
+        )
+
+        def _set_persona(payload: str) -> str:
+            pieces = [part.strip() for part in payload.split("|")]
+            if len(pieces) != 2:
+                return "usage: <style>|<principle1,principle2,...>"
+            style, principle_csv = pieces
+            principles = [item.strip() for item in principle_csv.split(",")]
+            profile = self.update_persona(style, principles)
+            return f"persona updated: {profile.to_text()}"
+
+        self.tools.register(
+            Tool(
+                name="set_persona",
+                description="Set persona using <style>|<principle1,principle2,...>",
+                handler=_set_persona,
+            )
+        )
+
+        self.tools.register(
+            Tool(
+                name="show_persona",
+                description="Show current persona settings",
+                handler=lambda _payload: self.persona.to_text(),
             )
         )
 
