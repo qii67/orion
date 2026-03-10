@@ -30,6 +30,17 @@ class TestAgentCore(unittest.TestCase):
         self.assertEqual(outcome["action"], "evolve_policy")
         self.assertIsNotNone(self.agent.semantic_memory.get("policy:last_evolution"))
 
+    def test_react_dialogue_uses_calculator_tool(self) -> None:
+        result = self.agent.run_dialogue_turn("请计算 2 + 3 * 4")
+        self.assertEqual(result.steps[0].action, "calculator")
+        self.assertEqual(result.steps[0].observation, "14.0")
+        self.assertIn("14.0", result.answer)
+
+    def test_react_dialogue_uses_shell_tool(self) -> None:
+        result = self.agent.run_dialogue_turn("执行命令: echo hello")
+        self.assertEqual(result.steps[0].action, "shell")
+        self.assertEqual(result.steps[0].observation, "hello")
+
 
 if __name__ == "__main__":
     unittest.main()

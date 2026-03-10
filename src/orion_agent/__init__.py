@@ -4,9 +4,14 @@ from .core import (
     Agent,
     EpisodicMemory,
     FeedbackEngine,
+    ReActAgent,
+    ReActResult,
+    ReActStep,
     SemanticMemory,
     Skill,
     SkillRegistry,
+    Tool,
+    ToolRegistry,
 )
 
 __all__ = [
@@ -16,4 +21,9 @@ __all__ = [
     "EpisodicMemory",
     "SemanticMemory",
     "FeedbackEngine",
+    "Tool",
+    "ToolRegistry",
+    "ReActAgent",
+    "ReActStep",
+    "ReActResult",
 ]
